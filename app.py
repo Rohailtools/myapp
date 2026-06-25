@@ -9,8 +9,15 @@ import requests
 import io
 import random
 from datetime import datetime, timedelta
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score
+
+# Try to import sklearn - if not available, ML features will be disabled
+try:
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.metrics import accuracy_score
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -455,6 +462,8 @@ def optimize_strategy(df, pair, lot_size, strategy_func):
 
 # ==================== ML PREDICTOR ====================
 def ml_predictor(df, pair):
+    if not SKLEARN_AVAILABLE:
+        return None, "scikit-learn not installed. Add 'scikit-learn' to requirements.txt"
     df_ml = df.copy()
     df_ml['Returns'] = df_ml['Close'].pct_change()
     df_ml['Volatility'] = df_ml['Returns'].rolling(20).std()
@@ -884,7 +893,16 @@ with tab5:
 # ==================== TAB 6: ML PREDICTOR ====================
 with tab6:
     st.header("🧠 AI Signal Predictor")
-    if 'df' not in st.session_state:
+    if not SKLEARN_AVAILABLE:
+        st.error("❌ scikit-learn not installed!")
+        st.info("💡 Fix: Add 'scikit-learn' to your requirements.txt file, then restart the app.")
+        st.code("""streamlit
+pandas
+numpy
+yfinance
+matplotlib
+scikit-learn""", language='text')
+    elif 'df' not in st.session_state:
         st.warning("⚠️ Pehle Backtest karo!")
     else:
         if st.button("🧠 TRAIN AI MODEL", use_container_width=True):
