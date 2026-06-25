@@ -19,22 +19,23 @@ def load_data(p, tf):
         return df if not df.empty else None
     except: return None
 
-def my_strategy(df):
+# --- DEFAULT STRATEGY ---
+default_strategy = """def my_strategy(df):
     df['Signal'] = 0
     df['Trend'] = df['Close'].rolling(50).mean()
     df['Liq_High'] = df['High'].rolling(20).max().shift(1)
     df['Liq_Low'] = df['Low'].rolling(20).min().shift(1)
+    
     bull_close = df['Close'] > df['Open']
     df.loc[(df['Close'] > df['Trend']) & (df['Low'] < df['Liq_Low']) & bull_close, 'Signal'] = 1
     bear_close = df['Open'] > df['Close']
     df.loc[(df['Close'] < df['Trend']) & (df['High'] > df['Liq_High']) & bear_close, 'Signal'] = -1
-    return df
+    return df"""
 
 # --- FRONT UI DESIGN ---
 st.title("📊 Algo Backtester Pro")
 st.markdown("Made for Traders, by Traders.")
 
-# Settings Sidebar
 with st.sidebar:
     st.header("🛠️ Control Panel")
     PAIR = st.selectbox("Select Pair", ['XAUUSD', 'BTCUSD', 'EURUSD', 'GBPUSD', 'USDJPY'])
@@ -43,6 +44,10 @@ with st.sidebar:
     LEVERAGE = st.number_input("Leverage", min_value=1, max_value=2000, value=100)
     SL_PIPS = st.number_input("Stop Loss (Pips)", value=300)
     TP_PIPS = st.number_input("Take Profit (Pips)", value=600)
+    
+    st.markdown("---")
+    st.header("✍️ Insert New Strategy")
+    strategy_code = st.text_area("Paste YouTube Strategy Code Here:", height=200, value=default_strategy)
     
     run_clicked = st.button("🚀 RUN BACKTEST", use_container_width=True, type="primary")
 
@@ -53,7 +58,13 @@ if run_clicked:
     if df is None:
         st.error("❌ Data load nahi hua. Timeframe ya Pair change karke try karo.")
     else:
-        df = my_strategy(df)
+        try:
+            exec(strategy_code, globals())
+            df = my_strategy(df)
+        except Exception as e:
+            st.error(f"❌ Strategy Code Error: {e}")
+            st.stop()
+            
         trades = []; in_trade = False; entry_p = sl_p = tp_p = 0; trade_type = 0
         pip_val = 0.1 if PAIR in ['EURUSD', 'GBPUSD', 'USDJPY'] else 1.0 
 
@@ -92,14 +103,12 @@ if run_clicked:
             for t in trades: equity.append(equity[-1] + t['Pnl'])
             max_dd = min([equity[i]-max(equity[:i+1]) for i in range(len(equity))])
             
-            # TOP METRICS
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("Total Trades", len(trades))
             col2.metric("Win Rate", f"{wr:.1f}%")
             col3.metric("Net P&L", f"${total_pnl:.2f}")
             col4.metric("Max Drawdown", f"${max_dd:.2f}")
             
-            # GRAPHS
             st.subheader("📈 Performance Graphs")
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6))
             ax1.plot(equity, color='#2a5298', linewidth=2)
@@ -110,7 +119,6 @@ if run_clicked:
             plt.tight_layout()
             st.pyplot(fig)
             
-            # HIDDEN DATA (TABS)
             tab1, tab2 = st.tabs(["💰 Lot Adjuster", "📊 Trade Log"])
             
             with tab1:
