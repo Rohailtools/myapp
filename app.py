@@ -48,66 +48,108 @@ strategy_code = st.text_area("Paste YouTube Strategy Code Here:", height=250, va
 run_clicked = st.button("🚀 RUN BACKTEST", use_container_width=True, type="primary")
 
 # ==================== DATA LOADER ====================
-@st.cache_data
+@st.cache_data(ttl=3600)
 def load_data(pair, timeframe):
+    # Ticker mapping
     ticker_map = {
         'EURUSD': 'EURUSD=X',
         'GBPUSD': 'GBPUSD=X',
         'USDJPY': 'USDJPY=X',
-        'XAUUSD': 'GC=F',
-        'BTCUSD': 'BTC-USD'
+        'XAUUSD': 'GC=F',      # Gold Futures
+        'BTCUSD': 'BTC-USD'    # Bitcoin
     }
-    ticker = ticker_map.get(pair, pair)
     
-    tf_map = {'1m':'1m', '5m':'5m', '15m':'15m', '1h':'1h', '4h':'4h', '1d':'1d'}
-    period = "60d" if timeframe in ['1m', '5m'] else "730d"
+    # Period mapping based on timeframe
+    period_map = {
+        '1m': '7d',     # 1m data only available for 7 days
+        '5m': '60d',    # 5m data for 60 days
+        '15m': '60d',
+        '1h': '730d',   # 1h data for 2 years
+        '4h': '730d',
+        '1d': '5y'      # Daily data for 5 years
+    }
+    
+    ticker = ticker_map.get(pair, pair)
+    period = period_map.get(timeframe, '1y')
     
     try:
-        df = yf.download(ticker, period=period, interval=tf_map[timeframe], progress=False, auto_adjust=False)
-        if df.empty:
-            return None
+        # Download data
+        df = yf.download(
+            ticker, 
+            period=period, 
+            interval=timeframe, 
+            progress=False, 
+            auto_adjust=False,
+            threads=False
+        )
         
-        # Flatten MultiIndex columns if present
+        # Check if data is empty
+        if df is None or df.empty:
+            return None, "Data empty - try different timeframe"
+        
+        # Handle MultiIndex columns (new yfinance format)
         if isinstance(df.columns, pd.MultiIndex):
+            # Flatten MultiIndex: ('Close', 'BTC-USD') -> 'Close'
             df.columns = df.columns.get_level_values(0)
         
-        # Rename columns to standard names
-        col_map = {}
-        for c in df.columns:
-            if 'Open' in str(c):
-                col_map[c] = 'Open'
-            elif 'High' in str(c):
-                col_map[c] = 'High'
-            elif 'Low' in str(c):
-                col_map[c] = 'Low'
-            elif 'Close' in str(c) and 'Adj' not in str(c):
-                col_map[c] = 'Close'
-            elif 'Volume' in str(c):
-                col_map[c] = 'Volume'
+        # Standardize column names
+        column_mapping = {}
+        for col in df.columns:
+            col_str = str(col).upper()
+            if 'OPEN' in col_str and 'ADJ' not in col_str:
+                column_mapping[col] = 'Open'
+            elif 'HIGH' in col_str:
+                column_mapping[col] = 'High'
+            elif 'LOW' in col_str:
+                column_mapping[col] = 'Low'
+            elif 'CLOSE' in col_str and 'ADJ' not in col_str:
+                column_mapping[col] = 'Close'
+            elif 'VOLUME' in col_str:
+                column_mapping[col] = 'Volume'
         
-        if col_map:
-            df = df.rename(columns=col_map)
+        if column_mapping:
+            df = df.rename(columns=column_mapping)
         
         # Ensure required columns exist
-        required = ['Open', 'High', 'Low', 'Close']
-        for col in required:
-            if col not in df.columns:
-                return None
+        required_cols = ['Open', 'High', 'Low', 'Close']
+        missing_cols = [c for c in required_cols if c not in df.columns]
         
-        df = df[required].copy()
-        df.dropna(inplace=True)
-        return df
+        if missing_cols:
+            return None, f"Missing columns: {missing_cols}. Available: {df.columns.tolist()}"
+        
+        # Select only required columns and clean
+        df = df[required_cols].copy()
+        df = df.dropna()
+        
+        # Ensure numeric values
+        for col in required_cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        df = df.dropna()
+        
+        if len(df) < 50:
+            return None, f"Only {len(df)} rows available. Need at least 50."
+        
+        return df, None
+        
     except Exception as e:
-        return None
+        return None, str(e)
 
 # ==================== BACKTEST ====================
 if run_clicked:
     with st.spinner(f'Downloading {PAIR} ({TIMEFRAME}) data...'):
-        df = load_data(PAIR, TIMEFRAME)
+        df, error_msg = load_data(PAIR, TIMEFRAME)
     
-    if df is None or df.empty:
-        st.error("❌ Data load nahi hua. Timeframe ya Pair change karke try karo.")
+    if df is None:
+        st.error(f"❌ Data load nahi hua: {error_msg}")
+        st.info("💡 Try karo: 1) Timeframe change karo (1h recommended) 2) Pair change karo (BTCUSD ya XAUUSD try karo)")
     else:
+        st.success(f"✅ Data loaded: {len(df)} rows from {df.index[0].strftime('%Y-%m-%d')} to {df.index[-1].strftime('%Y-%m-%d')}")
+        
+        # Show sample data
+        with st.expander("📊 Sample Data (First 5 rows)"):
+            st.dataframe(df.head())
+        
         # Execute user strategy
         try:
             exec(strategy_code, globals())
@@ -127,13 +169,13 @@ if run_clicked:
         tp_p = 0
         trade_type = 0
         
-        # ✅ FIXED PIP MULTIPLIER (XAUUSD = 0.10)
+        # FIXED PIP MULTIPLIER
         if PAIR in ['EURUSD', 'GBPUSD']:
             mult = 0.0001
         elif PAIR == 'USDJPY':
             mult = 0.01
         else:
-            mult = 0.10  # XAUUSD, BTCUSD, etc.
+            mult = 0.10  # XAUUSD, BTCUSD
         
         pip_val = 0.1 if PAIR in ['EURUSD', 'GBPUSD', 'USDJPY'] else 1.0
         
@@ -185,7 +227,7 @@ if run_clicked:
         
         # ==================== RESULTS ====================
         if not trades:
-            st.warning("❌ Koi trade nahi hua is period me.")
+            st.warning("❌ Koi trade nahi hua is period me. Strategy ke rules ko check karo ya settings change karo.")
         else:
             wins = [t for t in trades if t['Pnl'] > 0]
             total_pnl = sum(t['Pnl'] for t in trades)
